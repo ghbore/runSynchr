@@ -1,0 +1,82 @@
+#! /usr/bin/perl
+use strict;
+use warnings;
+use threads;
+use Pod::Usage;
+use Getopt::Long;
+
+=head1 NAME
+
+runSynchr - run multiple tasks at the same time, and evoke next task once one done
+
+=head1 SYNOPSIS
+
+runSynchr [-n 5 -min 10 -from 1 -to -1] tasks.list
+
+=cut
+
+my $fstatus = ".$$.stt";
+my $fupdate = ".$$.cfg";
+
+$SIG{USR1} = \&status;
+$SIG{USR2} = \&update;
+
+my ($n, $sec, $from, $to) = (5, 10*60, 1, -1);
+GetOptions(
+	'h|help|?'	=>	sub { pod2usage(1); },
+	'n=i'		=>	\$n,
+	'm|min=f'	=>	sub { $sec = int(60 * pop); },
+	's|sec=i'	=>	\$sec,
+	'f|from=i'	=>	\$from,
+	't|to=i'	=>	\$to,
+) or pod2usage(1);
+
+my $flag = 0;
+while(<>){
+	$flag = 1	if(!$flag and $. == $from);
+	$flag or next;
+	substr($_,0,1) eq '#' and next;
+	/^\s*$/ and next;
+	if(threads->list(threads::running) < $n){
+		unless(threads->create("wrapper", $_)){
+			warn "Fail and skip:\n\t'$_'\n";
+		}
+	}else{
+		sleep($sec);
+		redo;
+	}
+	last	if($. == $to);
+}
+
+while(threads->list(threads::running)){
+	sleep($sec);
+}
+
+foreach (threads->list(threads::joinable)){
+	$_->join();
+}
+
+sub wrapper($){
+	my $run = shift;
+	system('bash', '-c', "$run");
+}
+
+sub status{
+	my $ln = $.;
+	open FH, ">", $fstatus or (warn "Could not open status file.\n" and return -1);
+	print FH "$ln\n";
+	close FH;
+}
+sub update{
+	my %cfg;
+	my @c;
+	open FH, "<", $fupdate or (warn "Could not open config file.\n" and return -1);
+	while(my $ln = <FH>){
+		chomp($ln);
+		@c = split /\s*=\s*/, $ln;
+		$cfg{$c[0]} = $c[1];
+	}
+	close FH;
+	$n = $cfg{nThread}	if(exists $cfg{nThread});
+	$sec = $cfg{sec}	if(exists $cfg{sec});
+}
